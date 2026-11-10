@@ -1,1 +1,44 @@
-{% extends 'base.html' %}{% block body %}<h1>لوحة مسؤول المعالجة</h1><div class="stats"><div class="stat"><small>إجمالي الاستجابات المحفوظة</small><b>{{total}}</b></div><div class="stat"><small>آخر معرف محفوظ</small><b>{{last_id}}</b></div><div class="stat"><small>آخر مزامنة ناجحة</small><b class="smallvalue">{{last_sync}}</b></div></div><section class="panel"><h2>مزامنة KoboToolbox</h2><p>يجلب النظام من آخر معرف محفوظ مع إعادة فحص الحدّ الأخير، ويمنع تكرار الاستجابة باستخدام المعرف الفريد.</p><form method="post" action="{{url_for('sync')}}" onsubmit="return confirm('بدء جلب الاستجابات الجديدة من KoboToolbox؟')"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><button>جلب البيانات الآن</button></form><form method="post" action="{{url_for('sync')}}" style="margin-top:10px" onsubmit="return confirm('مزامنة كاملة: إعادة فحص كل استجابات Kobo وتحديث ما تغيّر. متابعة؟')"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><input type="hidden" name="full" value="1"><button>مزامنة كاملة (تحديث المعدَّل)</button></form><p><a href="{{url_for('kobo_check')}}" target="_blank">فحص ربط Kobo (لا يكتب شيئاً)</a></p></section><section class="panel"><h2>آخر عمليات المزامنة</h2><div class="tablewrap"><table><thead><tr><th>التاريخ</th><th>الحالة</th><th>قبل</th><th>بعد</th><th>الجديد</th><th>الرسالة</th></tr></thead><tbody>{% for x in logs %}<tr><td>{{x.started_at}}</td><td>{{x.status}}</td><td>{{x.before_count}}</td><td>{{x.after_count}}</td><td>{{x.inserted_count}}</td><td>{{x.message or ''}}</td></tr>{% else %}<tr><td colspan="6">لا توجد عمليات مزامنة.</td></tr>{% endfor %}</tbody></table></div></section>{% endblock %}
+{% extends 'base.html' %}{% block body %}
+<div class="pagehead"><div><h1>مزامنة البيانات</h1><p class="lead">اجلب استجابات المقابلات من KoboToolbox. تُحفظ الاستجابة الأصلية كما وصلت، ولا تتكرر أي استجابة.</p></div></div>
+<div class="metrics">
+  <div class="metric"><small>الاستجابات المحفوظة</small><b>{{ total }}</b></div>
+  <div class="metric"><small>آخر معرّف محفوظ</small><b>{{ last_id }}</b></div>
+  <div class="metric"><small>آخر مزامنة ناجحة</small><b class="sm">{{ last_sync[:16].replace('T',' ') if last_sync else 'لم تتم بعد' }}</b></div>
+</div>
+<div class="split">
+  <section class="panel">
+    <h2>جلب البيانات</h2>
+    <p class="muted" style="margin-bottom:16px">«الجلب العادي» يبدأ من آخر معرّف محفوظ. استخدم المزامنة الكاملة إذا عدّلت استجابات داخل Kobo.</p>
+    <div class="actions">
+      <form method="post" action="{{ url_for('sync') }}" data-confirm="جلب الاستجابات الجديدة من KoboToolbox الآن؟">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button>جلب الجديد</button></form>
+      <form method="post" action="{{ url_for('sync') }}" data-confirm="مزامنة كاملة: إعادة فحص كل استجابات Kobo وتحديث ما تغيّر. متابعة؟">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="full" value="1"><button class="btn ghost">مزامنة كاملة</button></form>
+      <a class="btn ghost" href="{{ url_for('kobo_check') }}" target="_blank" rel="noopener">فحص الربط</a>
+    </div>
+    <p class="hint">فحص الربط لا يكتب شيئاً في قاعدة البيانات.</p>
+  </section>
+  <section class="panel flush">
+    <div class="panel-head"><h2>آخر عمليات المزامنة</h2></div>
+    {% if logs %}<div class="tablewrap"><table>
+      <thead><tr><th>الوقت</th><th>الحالة</th><th class="num">جديدة</th><th class="num">الإجمالي</th></tr></thead>
+      <tbody>{% for x in logs %}<tr>
+        <td title="{{ x.message or '' }}">{{ x.started_at[:16].replace('T',' ') }}</td>
+        <td>{% if x.status=='success' %}<span class="badge ok">نجحت</span>{% elif x.status=='running' %}<span class="badge warn">جارية</span>{% else %}<span class="badge bad" title="{{ x.message or '' }}">فشلت</span>{% endif %}</td>
+        <td class="num">{{ x.inserted_count }}</td><td class="num">{{ x.after_count }}</td></tr>{% endfor %}</tbody></table></div>
+    {% else %}<div class="empty"><b>لا توجد عمليات مزامنة بعد</b>اضغط «جلب الجديد» لبدء أول مزامنة.</div>{% endif %}
+  </section>
+</div>
+<div class="nextbar">
+  <div><b>{{ 'البيانات جاهزة' if can_continue else 'الخطوة التالية مقفلة' }}</b><p>{{ 'انتقل إلى مطابقة الأسماء لتوحيد صيغ المرشحين والمقيّمين.' if can_continue else 'أجرِ مزامنة ناجحة تحوي استجابات لفتح مطابقة الأسماء.' }}</p></div>
+  {% if can_continue %}<a class="btn gold" href="{{ url_for('names') }}">متابعة إلى مطابقة الأسماء</a>{% else %}<button class="gold" disabled>متابعة إلى مطابقة الأسماء</button>{% endif %}
+</div>
+<dialog id="confirm"><form method="dialog"><div class="dlg-h"><h2>تأكيد</h2></div><div class="dlg-b"><p id="confirm-msg"></p></div>
+<div class="dlg-f"><button value="ok" class="gold">متابعة</button><button value="cancel" class="btn ghost">إلغاء</button></div></form></dialog>
+<script>
+(function(){var d=document.getElementById('confirm');
+document.querySelectorAll('form[data-confirm]').forEach(function(f){f.addEventListener('submit',function(e){
+ if(f.dataset.ok){return}e.preventDefault();document.getElementById('confirm-msg').textContent=f.dataset.confirm;d.returnValue='';d.showModal();
+ d.addEventListener('close',function h(){d.removeEventListener('close',h);if(d.returnValue==='ok'){f.dataset.ok='1';f.submit()}});});});})();
+</script>
+{% endblock %}

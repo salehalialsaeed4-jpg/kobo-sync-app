@@ -1,1 +1,20 @@
-{% extends 'base.html' %}{% block body %}<h1>نتائج المعالجة</h1><p>عدد المرشحين: {{run.row_count}} | النطاق: {{run.province}} | الفترة: {{run.date_from or 'البداية'}} إلى {{run.date_to or 'النهاية'}}</p><div class="actions"><a class="button" href="{{url_for('export',run_id=run.id,kind='xlsx')}}">تنزيل Excel</a><a class="button secondary" href="{{url_for('export',run_id=run.id,kind='pdf')}}">تنزيل PDF</a></div><section class="panel tablewrap">{{table|safe}}</section>{% endblock %}
+{% extends 'base.html' %}{% block body %}
+<div class="pagehead"><div><h1>نتائج المعالجة</h1>
+<p class="lead">{{ run.row_count }} مرشح · {{ 'كل المحافظات' if run.province=='all' else run.province }} · {{ run.date_from or 'البداية' }} ← {{ run.date_to or 'النهاية' }}</p></div>
+<div class="actions"><a class="btn gold" href="{{ url_for('export', run_id=run.id, kind='xlsx') }}">تنزيل Excel</a>
+{% if single_province %}<a class="btn" href="{{ url_for('export', run_id=run.id, kind='pdf') }}">تنزيل PDF</a>{% else %}<button class="btn" disabled title="تقرير PDF يخص محافظة واحدة؛ أعد المعالجة بمحافظة محددة">تنزيل PDF</button>{% endif %}</div></div>
+{% if stale %}<div class="flash warning" role="alert">تغيّرت الأسماء أو البيانات بعد إنشاء هذه النتائج، فقد لا تعكس آخر حالة. أعد المعاينة والدمج للحصول على نتائج محدّثة.</div>{% endif %}
+<section class="panel flush">
+{% for r in rows %}
+  <article class="res">
+    <div><h3>{{ r.name }}<span class="badge gray">{{ r.province }}</span></h3>
+      <div class="meta">{{ r.date }}</div>
+      <div class="rvs">{% for v in r.reviewers %}<span>{{ v.name }}{% if v.score is not none %}<b>{{ '%g'|format(v.score) }}</b>{% endif %}</span>{% endfor %}</div></div>
+    <div class="score {{ r.cat }}">{% if r.score is not none %}<b>{{ '%g'|format(r.score) }}</b><small>النتيجة الموزونة</small>{% else %}<b>—</b>{% endif %}</div>
+    <p class="rec">{{ r.rec }}</p>
+    {% if r.notes %}<details class="notes"><summary>ملاحظات المقيّمين</summary><pre>{{ r.notes }}</pre></details>{% endif %}
+  </article>
+{% else %}<div class="empty"><b>لا توجد نتائج</b></div>{% endfor %}
+</section>
+<div class="actions"><a class="btn ghost" href="{{ url_for('preview') }}">رجوع إلى المعاينة</a><a class="btn ghost" href="{{ url_for('process') }}">نطاق جديد</a></div>
+{% endblock %}

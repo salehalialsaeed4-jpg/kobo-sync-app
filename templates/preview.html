@@ -1,1 +1,87 @@
-{% extends 'base.html' %}{% block body %}<h1>مراجعة البيانات قبل الدمج</h1><p>عدد الاستجابات ضمن النطاق: <b>{{row_count}}</b> | المحافظة: {{province}} | الفترة: {{date_from or 'كل التواريخ'}} إلى {{date_to or 'كل التواريخ'}}</p><section class="panel tablewrap">{{table|safe}}</section><form method="post" action="{{url_for('merge')}}"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><button>اعتماد البيانات وإنشاء جدول الدمج</button><a class="button secondary" href="{{url_for('process')}}">العودة لتعديل النطاق</a></form>{% endblock %}
+{% extends 'base.html' %}{% block body %}
+<div class="pagehead"><div><h1>المعاينة وتحديد المقيّم المعتمد</h1>
+<p class="lead">راجع تقييمات كل مرشح بعد توحيد الأسماء. حدّد مقيّماً <b>معتمداً</b> واحداً لكل مرشح لديه أكثر من مقيّم؛ البقية ثانويون تلقائياً.</p></div>
+<a class="btn ghost" href="{{ url_for('process') }}">تعديل النطاق</a></div>
+
+<section class="panel">
+  <div class="actions" style="gap:8px">
+    <span class="badge">{{ groups|length }} مرشح</span><span class="badge gray">{{ row_count }} استجابة</span>
+    <span class="badge gray">{{ 'كل المحافظات' if scope.province=='all' else scope.province }}</span>
+    <span class="badge gray">{{ scope.date_from or 'البداية' }} ← {{ scope.date_to or 'النهاية' }}</span>
+    {% if unregistered %}<span class="badge warn" title="لا يوجد تطابق في قائمة المرشحين المسجلين">{{ unregistered }} غير مسجل</span>{% endif %}
+  </div>
+  <p class="small muted" style="margin-top:14px">أوزان التقييم حسب عدد المقيّمين (المعتمد أولاً، ثم كل ثانوي):</p>
+  <div class="wtable">{% for n,w in weight_table.items() %}<span><b>{{ n }}</b> {{ 'مقيّم' if n==1 else 'مقيّمين' }}: {{ w[0] }}{% if n>1 %} + {{ w[1] }}{% if n>2 %} × {{ n-1 }}{% endif %}{% endif %}</span>{% endfor %}</div>
+</section>
+
+<form method="post" action="{{ url_for('merge') }}" id="mform">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="count" value="{{ groups|length }}">
+{% set multi = groups|selectattr('count','gt',1)|list %}
+{% if multi %}
+<section class="panel" id="bulk"><div class="bulk">
+  <div class="field"><label for="bulksel">تحديد سريع</label>
+    <select id="bulksel"><option value="">اختر مقيّماً ليكون معتمداً لكل مرشح قيّمه…</option>{% for n in reviewer_names %}<option>{{ n }}</option>{% endfor %}</select></div>
+  <button type="button" class="btn ghost" id="bulkgo">تطبيق</button></div>
+  <p class="hint">يُطبَّق على المرشحين الذين شارك هذا المقيّم في تقييمهم فقط، ويمكنك تعديل أي مرشح بعدها.</p></section>
+{% endif %}
+
+{% for x in groups %}{% set i = loop.index0 %}
+<article class="cand {{ 'bad' if x.too_many }}" data-n="{{ x.count }}" data-multi="{{ 1 if x.count>1 else 0 }}">
+  <input type="hidden" name="t_{{i}}" value="{{ x.trainer }}"><input type="hidden" name="p_{{i}}" value="{{ x.province }}">
+  <div class="cand-h"><div class="t"><b>{{ x.trainer }}</b><small>{{ x.province or '—' }}</small></div>
+    {% if x.registered %}<span class="badge ok">مسجل</span>{% else %}<span class="badge warn">غير مسجل</span>{% endif %}
+    <span class="badge gray">{{ x.count }} {{ 'مقيّم' if x.count==1 else 'مقيّمين' }}</span>
+    {% if x.too_many %}<span class="badge bad">أكثر من {{ max_reviewers }} مقيّمين</span>{% endif %}</div>
+  {% for r in x.reviewers %}
+    {% if x.count>1 %}
+    <label class="rv {{ 'sel' if r.name==x.primary }}" style="margin:0;font-weight:400"><input type="radio" name="r_{{i}}" value="{{ r.name }}" {{ 'checked' if r.name==x.primary }} aria-label="تحديد {{ r.name }} معتمداً">
+      <span>{{ r.name }}</span><span class="sc">{{ '%g'|format(r.score) if r.score is not none else '—' }}</span><span class="wpill">—</span></label>
+    {% else %}
+    <div class="rv"><span class="dia" style="color:var(--gold)"></span><span>{{ r.name }}</span><span class="sc">{{ '%g'|format(r.score) if r.score is not none else '—' }}</span><span class="wpill">100%</span></div>
+    {% endif %}
+  {% endfor %}
+</article>
+{% else %}<div class="panel empty"><b>لا يوجد مرشحون ضمن النطاق</b>عدّل النطاق ثم أعد المحاولة.</div>{% endfor %}
+
+<div class="mergebar">
+  <div class="st"><b id="mstate">…</b><div class="small muted" id="msub"></div></div>
+  <a class="btn ghost" href="{{ url_for('process') }}">رجوع</a>
+  <button class="gold" id="mbtn" disabled>اعتماد البيانات وإنشاء النتائج</button>
+</div>
+</form>
+
+<script>
+(function(){
+var W={{ weight_table|tojson }};
+var cards=[].slice.call(document.querySelectorAll('.cand'));
+function upd(){
+  var need=0,done=0,bad=0;
+  cards.forEach(function(c){
+    var n=+c.dataset.n, multi=c.dataset.multi==='1';
+    if(n>5){bad++;}
+    if(!multi) return;
+    need++;
+    var radios=[].slice.call(c.querySelectorAll('input[type=radio]')), chosen=radios.filter(function(r){return r.checked})[0];
+    if(chosen) done++;
+    c.classList.toggle('missing',!chosen && n<=5);
+    radios.forEach(function(r){
+      var row=r.closest('.rv'), pill=row.querySelector('.wpill'), w=W[n]||[];
+      row.classList.toggle('sel',r.checked);
+      pill.textContent = chosen ? (r.checked?w[0]:w[1]) : '—';
+    });
+  });
+  var ok = need===done && bad===0;
+  document.getElementById('mstate').textContent = bad?('يوجد '+bad+' مرشح بأكثر من 5 مقيّمين'):(need===0?'لا يحتاج أي مرشح إلى تحديد معتمد':('حُدِّد المعتمد لـ '+done+' من '+need+' مرشحاً'));
+  document.getElementById('msub').textContent = ok ? 'كل شيء جاهز للدمج.' : (bad?'راجع توحيد أسماء المقيّمين ثم أعد المحاولة.':'حدّد المقيّم المعتمد للمرشحين المظللين بالذهبي.');
+  document.getElementById('mbtn').disabled=!ok;
+}
+document.addEventListener('change',function(e){if(e.target.type==='radio')upd()});
+var go=document.getElementById('bulkgo');
+if(go)go.addEventListener('click',function(){
+  var v=document.getElementById('bulksel').value; if(!v)return;
+  cards.forEach(function(c){[].forEach.call(c.querySelectorAll('input[type=radio]'),function(r){if(r.value===v)r.checked=true})});upd();
+});
+upd();
+})();
+</script>
+{% endblock %}

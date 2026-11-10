@@ -79,6 +79,22 @@ CREATE TABLE IF NOT EXISTS processing_runs (
  result_json TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS primary_choices (
+ trainer_key TEXT NOT NULL,
+ province_key TEXT NOT NULL,
+ reviewer_name TEXT NOT NULL,
+ updated_at TEXT NOT NULL,
+ PRIMARY KEY(trainer_key, province_key)
+);
+
+CREATE TABLE IF NOT EXISTS name_batches (
+ id SERIAL PRIMARY KEY,
+ created_at TEXT NOT NULL,
+ summary TEXT NOT NULL,
+ snapshot_json TEXT NOT NULL,
+ undone BOOLEAN NOT NULL DEFAULT FALSE
+);
+
 -- أمان: تفعيل RLS بلا سياسات = منع الوصول عبر واجهة Supabase REST العامة. اتصال التطبيق المباشر لا يتأثر.
 ALTER TABLE candidates ENABLE ROW LEVEL SECURITY;
 ALTER TABLE submissions ENABLE ROW LEVEL SECURITY;
@@ -86,6 +102,8 @@ ALTER TABLE name_aliases ENABLE ROW LEVEL SECURITY;
 ALTER TABLE sync_state ENABLE ROW LEVEL SECURITY;
 ALTER TABLE sync_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE processing_runs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE primary_choices ENABLE ROW LEVEL SECURITY;
+ALTER TABLE name_batches ENABLE ROW LEVEL SECURITY;
 '''
 
 def _clean_db_url():
@@ -217,7 +235,7 @@ def add_candidate(full_name, province, normalized_name, normalized_province):
             ''', (full_name, normalized_name, province, normalized_province, now))
             row = cur.fetchone()
             return row['id'], None
-        except Exception:
+        except psycopg2.errors.UniqueViolation:
             con.conn.rollback()
             row = con.execute('''
                 SELECT id, full_name, province FROM candidates 
@@ -303,3 +321,129 @@ def list_candidate_keys():
     with connect() as con:
         rows = con.execute('SELECT normalized_name, normalized_province FROM candidates').fetchall()
     return {(r['normalized_name'], r['normalized_province']) for r in rows}
+
+# ---------------------------------------------------------------- المسار الموجّه
+def now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def set_states(**kv):
+    with connect() as con:
+        for k, v in kv.items():
+            set_state(con, k, v)
+
+
+def workflow_snapshot():
+    """كل ما يلزم لشريط الخطوات باتصال واحد."""
+    with connect() as con:
+        n = con.execute('SELECT COUNT(*) AS c FROM submissions').fetchone()['c']
+        st = {r['key']: r['value'] for r in con.execute('SELECT key, value FROM sync_state').fetchall()}
+        last_run = con.execute('SELECT id, created_at FROM processing_runs ORDER BY id DESC LIMIT 1').fetchone()
+    scope = None
+    if st.get('wf_scope'):
+        try:
+            scope = json.loads(st['wf_scope'])
+        except ValueError:
+            scope = None
+    return {
+        'submissions': n,
+        'last_success_at': st.get('last_success_at', ''),
+        'names_ok': bool(st.get('wf_names_ok_at')),
+        'scope': scope,
+        'merged_run': int(st['wf_merged_run']) if st.get('wf_merged_run', '').isdigit() else None,
+        'data_changed_at': st.get('data_changed_at', ''),
+        'last_run_id': last_run['id'] if last_run else None,
+    }
+
+
+def fail_stale_syncs(minutes=10):
+    """مزامنة بقيت 'running' بعد موت العامل تُعلَّم فاشلة كي لا تظهر عالقة."""
+    from datetime import timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
+    with connect() as con:
+        con.execute("UPDATE sync_logs SET status='failed', finished_at=%s, message='انقطعت المزامنة قبل اكتمالها' WHERE status='running' AND started_at < %s",
+                    (now_iso(), cutoff))
+
+
+# ---------------------------------------------------------------- المقيّم المعتمد
+def get_primary_choices():
+    with connect() as con:
+        rows = con.execute('SELECT trainer_key, province_key, reviewer_name FROM primary_choices').fetchall()
+    return {(r['trainer_key'], r['province_key']): r['reviewer_name'] for r in rows}
+
+
+def save_primary_choices(choices):
+    """choices: {(trainer_key, province_key): reviewer_name}."""
+    if not choices:
+        return
+    ts = now_iso()
+    with connect() as con:
+        for (t, p), name in choices.items():
+            con.execute('''
+                INSERT INTO primary_choices(trainer_key, province_key, reviewer_name, updated_at)
+                VALUES(%s,%s,%s,%s)
+                ON CONFLICT(trainer_key, province_key) DO UPDATE SET reviewer_name=EXCLUDED.reviewer_name, updated_at=EXCLUDED.updated_at
+            ''', (t, p, name, ts))
+
+
+# ---------------------------------------------------------------- اعتماد الأسماء دفعة واحدة
+def get_alias_rows(entity_type):
+    with connect() as con:
+        rows = con.execute('SELECT normalized_original, original_name, canonical_name FROM name_aliases WHERE entity_type=%s', (entity_type,)).fetchall()
+    return {r['normalized_original']: dict(r) for r in rows}
+
+
+def apply_name_changes(items):
+    """items: [{entity_type, original, normalized, canonical}] تُحفظ كلها في معاملة واحدة مع لقطة للتراجع."""
+    snapshot = []
+    seen = set()
+    ts = now_iso()
+    with connect() as con:
+        for it in items:
+            first = (it['entity_type'], it['normalized']) not in seen
+            seen.add((it['entity_type'], it['normalized']))
+            prev = con.execute('SELECT original_name, canonical_name FROM name_aliases WHERE entity_type=%s AND normalized_original=%s',
+                               (it['entity_type'], it['normalized'])).fetchone()
+            if first:  # الحالة قبل الاعتماد فقط، حتى لو تكررت صيغتان بالتطبيع نفسه
+                snapshot.append({'entity_type': it['entity_type'], 'normalized': it['normalized'],
+                                 'prev': dict(prev) if prev else None})
+            con.execute('''
+                INSERT INTO name_aliases(entity_type, original_name, normalized_original, canonical_name, approved_at)
+                VALUES(%s,%s,%s,%s,%s)
+                ON CONFLICT(entity_type, normalized_original) DO UPDATE SET
+                original_name=EXCLUDED.original_name, canonical_name=EXCLUDED.canonical_name, approved_at=EXCLUDED.approved_at
+            ''', (it['entity_type'], it['original'], it['normalized'], it['canonical'], ts))
+        cur = con.execute('INSERT INTO name_batches(created_at, summary, snapshot_json) VALUES(%s,%s,%s) RETURNING id',
+                          (ts, f'{len(items)} اسماً', json.dumps(snapshot, ensure_ascii=False)))
+        batch_id = cur.fetchone()['id']
+        set_state(con, 'data_changed_at', ts)
+        set_state(con, 'wf_names_ok_at', '')
+    return batch_id
+
+
+def last_name_batch():
+    with connect() as con:
+        row = con.execute('SELECT id, created_at, summary FROM name_batches WHERE undone=FALSE ORDER BY id DESC LIMIT 1').fetchone()
+    return dict(row) if row else None
+
+
+def undo_last_name_batch():
+    ts = now_iso()
+    with connect() as con:
+        row = con.execute('SELECT id, snapshot_json FROM name_batches WHERE undone=FALSE ORDER BY id DESC LIMIT 1 FOR UPDATE').fetchone()
+        if not row:
+            return None
+        for s in reversed(json.loads(row['snapshot_json'])):
+            if s['prev'] is None:
+                con.execute('DELETE FROM name_aliases WHERE entity_type=%s AND normalized_original=%s', (s['entity_type'], s['normalized']))
+            else:
+                con.execute('''
+                    INSERT INTO name_aliases(entity_type, original_name, normalized_original, canonical_name, approved_at)
+                    VALUES(%s,%s,%s,%s,%s)
+                    ON CONFLICT(entity_type, normalized_original) DO UPDATE SET
+                    original_name=EXCLUDED.original_name, canonical_name=EXCLUDED.canonical_name, approved_at=EXCLUDED.approved_at
+                ''', (s['entity_type'], s['prev']['original_name'], s['normalized'], s['prev']['canonical_name'], ts))
+        con.execute('UPDATE name_batches SET undone=TRUE WHERE id=%s', (row['id'],))
+        set_state(con, 'data_changed_at', ts)
+        set_state(con, 'wf_names_ok_at', '')
+        return row['id']

@@ -320,7 +320,7 @@ def build_pdf_report(merged_df):
 
     # الترتيب: من المقبولين إلى المرفوضين، وداخل كل فئة من المتوسط الأعلى إلى الأدنى
     df = merged_df.copy()
-    avg_col = 'النتيجة النهائية (المتوسط الحسابي)'
+    avg_col = next((c for c in ('النتيجة النهائية (المتوسط الموزون)', 'النتيجة النهائية (المتوسط الحسابي)') if c in merged_df.columns), 'النتيجة النهائية (المتوسط الموزون)')
     df['_avg'] = pd.to_numeric(df[avg_col], errors='coerce')
     df['_cat'] = df['_avg'].map(category_of)
     df['_rank'] = df['_cat'].map({k: i for i, k in enumerate(CATEGORY_ORDER)})

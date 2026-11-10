@@ -1,1 +1,15 @@
-{% extends 'base.html' %}{% block body %}<h1>تحديد نطاق المعالجة</h1><section class="panel"><form method="post"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><label>المحافظة</label><select name="province"><option value="all">جميع المحافظات</option>{% for p in provinces %}<option>{{p}}</option>{% endfor %}</select><div class="formgrid"><div><label>من تاريخ (end)</label><input type="date" name="date_from"></div><div><label>إلى تاريخ (end)</label><input type="date" name="date_to"></div></div><button>معالجة ودمج التقييمات</button></form></section><p class="muted">يعتمد اختيار أحدث تقييم مكرر على وقت الإرسال ثم تاريخ end، ويكون مفتاح الدمج: المرشح + المحافظة + المقيّم.</p>{% endblock %}
+{% extends 'base.html' %}{% block body %}
+<div class="pagehead"><div><h1>تحديد نطاق المعالجة</h1><p class="lead">اختر المحافظة والفترة. يُحتفظ بأحدث تقييم لكل مقيّم لكل مرشح داخل المحافظة. تقرير PDF يخص محافظة واحدة.</p></div></div>
+<section class="panel">
+  <form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="field"><label for="pv">المحافظة</label>
+      <select id="pv" name="province"><option value="all">جميع المحافظات</option>{% for p in provinces %}<option {{ 'selected' if scope.get('province')==p }}>{{p}}</option>{% endfor %}</select></div>
+    <div class="grid2">
+      <div class="field"><label for="df">من تاريخ (end)</label><input id="df" type="date" name="date_from" value="{{ scope.get('date_from','') }}" {% if dates %}min="{{ dates[0] }}" max="{{ dates[-1] }}"{% endif %}></div>
+      <div class="field"><label for="dt">إلى تاريخ (end)</label><input id="dt" type="date" name="date_to" value="{{ scope.get('date_to','') }}" {% if dates %}min="{{ dates[0] }}" max="{{ dates[-1] }}"{% endif %}></div>
+    </div>
+    {% if dates %}<p class="hint">البيانات المتاحة من {{ dates[0] }} إلى {{ dates[-1] }}. اترك التاريخ فارغاً لتشمل كل الفترة.</p>{% endif %}
+    <div class="actions" style="margin-top:18px"><button class="gold">متابعة إلى المعاينة</button><a class="btn ghost" href="{{ url_for('names') }}">رجوع إلى الأسماء</a></div>
+  </form>
+</section>
+{% endblock %}

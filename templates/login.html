@@ -1,1 +1,28 @@
-{% extends 'base.html' %}{% block body %}<section class="panel narrow"><h1>تسجيل الدخول</h1><form method="post"><label>نوع المستخدم</label><select name="role"><option value="admin">مسؤول المعالجة</option><option value="entry">مدخل أسماء المرشحين</option></select><label>كلمة المرور</label><input type="password" name="password" required><button>دخول</button></form></section>{% endblock %}
+{% from '_logo.html' import mark %}<!doctype html>
+<html lang="ar" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>تسجيل الدخول — مقابلات المدربين</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}"></head>
+<body>
+<div class="auth">
+  <section class="auth-art">
+    {{ mark('mark', light=True) }}
+    <h1>من تقييم اللجنة إلى قرار الاعتماد، بخطوات واضحة.</h1>
+    <p>اجمع نتائج المقابلات، ووحّد الأسماء، واحسب النتيجة الموزونة لكل مرشح، ثم صدّر التقرير.</p>
+    {{ mark('big', light=True) }}
+  </section>
+  <section class="auth-form">
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <h2>تسجيل الدخول</h2>
+      <p class="muted" style="margin-bottom:20px">اختر نوع حسابك وأدخل كلمة المرور.</p>
+      {% with messages=get_flashed_messages(with_categories=true) %}{% for cat,msg in messages %}<div class="flash {{cat}}" role="alert">{{msg}}</div>{% endfor %}{% endwith %}
+      <div class="seg" role="radiogroup" aria-label="نوع المستخدم">
+        <input type="radio" name="role" id="r-admin" value="admin" checked><label for="r-admin">مسؤول المعالجة</label>
+        <input type="radio" name="role" id="r-entry" value="entry"><label for="r-entry">مدخل المرشحين</label>
+      </div>
+      <div class="field"><label for="pw">كلمة المرور</label><input id="pw" type="password" name="password" required autocomplete="current-password" autofocus></div>
+      <button class="gold" style="width:100%;height:48px">دخول</button>
+    </form>
+  </section>
+</div>
+</body></html>
