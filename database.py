@@ -1,11 +1,16 @@
 import json
 import os
+import time
+import logging
+import threading
+from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode, unquote
 import psycopg2
 import psycopg2.extras
 from pathlib import Path
 from datetime import datetime, timezone
 
 BASE_DIR = Path(__file__).resolve().parent
+log = logging.getLogger('db')
 
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS candidates (
@@ -75,16 +80,62 @@ CREATE TABLE IF NOT EXISTS processing_runs (
 );
 '''
 
+def _clean_db_url():
+    """يقرأ DATABASE_URL وينظّفه: مسافات/اقتباسات/CRLF، ويضيف sslmode و connect_timeout."""
+    raw = (os.environ.get('DATABASE_URL') or '').strip().strip('"').strip("'").strip()
+    if not raw:
+        raise RuntimeError('متغير البيئة DATABASE_URL غير معرّف.')
+    if raw.startswith('postgres://'):
+        raw = 'postgresql://' + raw[len('postgres://'):]
+    u = urlparse(raw)
+    q = dict(parse_qsl(u.query))
+    q.setdefault('sslmode', 'require')
+    q.setdefault('connect_timeout', '10')
+    q.setdefault('keepalives', '1')
+    return urlunparse(u._replace(query=urlencode(q))), u
+
+
+def _explain(err, u):
+    """يحوّل أخطاء الاتصال الشائعة إلى رسالة عربية واضحة تدل على الحل."""
+    host = u.hostname or ''
+    user = unquote(u.username or '')
+    msg = str(err)
+    if host.startswith('db.') and host.endswith('.supabase.co'):
+        return ('الرابط يستخدم الاتصال المباشر لـ Supabase (IPv6 فقط) وهذه الاستضافة لا تدعم IPv6. '
+                'استخدم رابط Session pooler من Supabase > Connect، شكله: '
+                'postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres')
+    if host.endswith('.pooler.supabase.com') and '.' not in user:
+        return ('مع الـ pooler يجب أن يكون اسم المستخدم postgres.<project-ref> وليس postgres فقط.')
+    if 'password authentication failed' in msg:
+        return 'كلمة مرور قاعدة البيانات خاطئة (تأكد من ترميز الرموز الخاصة مثل @ إلى %40).'
+    if 'Tenant or user not found' in msg:
+        return 'اسم المستخدم أو المنطقة (region) في رابط الـ pooler غير صحيح، انسخه كما هو من Supabase.'
+    return msg
+
+
+def _open_connection(retries=4):
+    url, parsed = _clean_db_url()
+    last = None
+    for attempt in range(1, retries + 1):
+        try:
+            return psycopg2.connect(url, cursor_factory=psycopg2.extras.RealDictCursor)
+        except psycopg2.OperationalError as e:
+            last = e
+            log.warning('DB connect attempt %s/%s failed: %s', attempt, retries, str(e).strip().splitlines()[0])
+            # أخطاء الإعداد لا فائدة من إعادة المحاولة عليها
+            if any(k in str(e) for k in ('password authentication failed', 'Tenant or user not found', 'Network is unreachable')):
+                break
+            time.sleep(min(2 ** attempt, 8))
+    raise RuntimeError(_explain(last, parsed)) from last
+
+
 class PostgresConnectionWrapper:
     def __init__(self):
         self.conn = None
         self.cursor = None
 
     def __enter__(self):
-        db_url = os.environ.get('DATABASE_URL')
-        if not db_url:
-            raise RuntimeError('متغير البيئة DATABASE_URL غير معرف أو غير صالح.')
-        self.conn = psycopg2.connect(db_url, cursor_factory=psycopg2.extras.RealDictCursor)
+        self.conn = _open_connection()
         self.cursor = self.conn.cursor()
         return self
 
@@ -94,20 +145,43 @@ class PostgresConnectionWrapper:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.conn:
-            if exc_type:
-                self.conn.rollback()
-            else:
-                self.conn.commit()
-            self.cursor.close()
-            self.conn.close()
+            try:
+                if exc_type:
+                    self.conn.rollback()
+                else:
+                    self.conn.commit()
+                self.cursor.close()
+            finally:
+                self.conn.close()
 
 def connect():
     return PostgresConnectionWrapper()
+
+_init_lock = threading.Lock()
+_initialized = False
 
 def init_db():
     with connect() as con:
         con.execute(SCHEMA)
         con.execute("INSERT INTO sync_state(key, value) VALUES('last_id', '0') ON CONFLICT (key) DO NOTHING")
+
+def ensure_db():
+    """تهيئة الجداول مرة واحدة؛ تُعاد المحاولة عند أي طلب إذا فشلت سابقاً (بدل إسقاط التطبيق عند الإقلاع)."""
+    global _initialized
+    if _initialized:
+        return
+    with _init_lock:
+        if not _initialized:
+            init_db()
+            _initialized = True
+
+def db_ok():
+    try:
+        with connect() as con:
+            con.execute('SELECT 1')
+        return True, ''
+    except Exception as e:
+        return False, str(e)
 
 def count_submissions():
     with connect() as con:

@@ -4,7 +4,7 @@ from datetime import datetime
 from functools import wraps
 from flask import Flask, render_template, request, redirect, url_for, flash, session, send_file, jsonify
 import pandas as pd
-from database import init_db, connect, count_submissions, get_state, add_candidate, list_name_values, save_alias, get_submissions, list_filter_values, save_processing_run, get_processing_run, list_candidate_keys
+from database import ensure_db, db_ok, connect, count_submissions, get_state, add_candidate, list_name_values, save_alias, get_submissions, list_filter_values, save_processing_run, get_processing_run, list_candidate_keys
 from kobo_sync import sync_from_kobo
 from processing import build_merged, excel_bytes
 from cleaner import normalize_arabic
@@ -12,12 +12,20 @@ from cleaner import normalize_arabic
 app=Flask(__name__)
 app.secret_key=os.environ.get('FLASK_SECRET_KEY') or os.urandom(32)
 app.config['MAX_CONTENT_LENGTH']=8*1024*1024
-init_db()
+try:
+    ensure_db()
+except Exception as _e:
+    app.logger.error('Database not ready at boot (will retry on requests): %s', _e)
 
 @app.before_request
 def load_role():
-    if request.endpoint in ('login','static'):
+    if request.endpoint in ('login','static','health'):
         return
+    try:
+        ensure_db()
+    except Exception as e:
+        app.logger.error('Database unavailable: %s', e)
+        return ('قاعدة البيانات غير متاحة حالياً. حاول بعد قليل. إذا استمرت المشكلة فراجع إعداد DATABASE_URL.', 503)
     if request.method=='POST':
         expected=session.get('_csrf_token','')
         supplied=request.form.get('csrf_token','')
@@ -194,7 +202,10 @@ def export(run_id,kind):
 
 @app.route('/health')
 def health():
-    return jsonify(status='ok',database='sqlite',submissions=count_submissions())
+    ok,err=db_ok()
+    if not ok:
+        return jsonify(status='degraded',database='postgres',error=err),503
+    return jsonify(status='ok',database='postgres',submissions=count_submissions())
 
 if __name__=='__main__':
     app.run(debug=False,port=int(os.environ.get('PORT',8000)))
