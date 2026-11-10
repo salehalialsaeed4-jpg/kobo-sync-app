@@ -5,13 +5,14 @@ from functools import wraps
 from flask import Flask, render_template, request, redirect, url_for, flash, session, send_file, jsonify
 import pandas as pd
 from database import ensure_db, db_ok, connect, count_submissions, get_state, add_candidate, list_name_values, save_alias, get_submissions, list_filter_values, save_processing_run, get_processing_run, list_candidate_keys
-from kobo_sync import sync_from_kobo
+from kobo_sync import sync_from_kobo, check_kobo
 from processing import build_merged, excel_bytes
 from cleaner import normalize_arabic
 
 app=Flask(__name__)
 app.secret_key=os.environ.get('FLASK_SECRET_KEY') or os.urandom(32)
 app.config['MAX_CONTENT_LENGTH']=8*1024*1024
+app.json.ensure_ascii=False
 try:
     ensure_db()
 except Exception as _e:
@@ -103,11 +104,19 @@ def dashboard():
 @roles_required('admin')
 def sync():
     try:
-        result=sync_from_kobo()
-        flash(f"اكتملت المزامنة: قبل {result['before']}، بعد {result['after']}، استجابات جديدة {result['inserted']}، تمت مراجعة {result['fetched']}.",'success')
+        result=sync_from_kobo(full=request.form.get('full')=='1')
+        flash(f"اكتملت المزامنة: قبل {result['before']}، بعد {result['after']}، جديدة {result['inserted']}، معدَّلة {result['updated']}، تمت مراجعة {result['fetched']}.",'success')
     except Exception as e:
         flash(f'فشلت المزامنة: {e}','danger')
     return redirect(url_for('dashboard'))
+
+@app.route('/kobo-check')
+@roles_required('admin')
+def kobo_check():
+    try:
+        return jsonify(status='ok',**check_kobo())
+    except Exception as e:
+        return jsonify(status='error',error=str(e)),502
 
 @app.route('/names',methods=['GET','POST'])
 @roles_required('admin')

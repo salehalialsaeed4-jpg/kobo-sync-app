@@ -78,6 +78,14 @@ CREATE TABLE IF NOT EXISTS processing_runs (
  row_count INTEGER NOT NULL,
  result_json TEXT NOT NULL
 );
+
+-- أمان: تفعيل RLS بلا سياسات = منع الوصول عبر واجهة Supabase REST العامة. اتصال التطبيق المباشر لا يتأثر.
+ALTER TABLE candidates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE submissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE name_aliases ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sync_state ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sync_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE processing_runs ENABLE ROW LEVEL SECURITY;
 '''
 
 def _clean_db_url():
@@ -237,22 +245,39 @@ def list_name_values():
         reviewers = con.execute("SELECT reviewer_name_original AS name, COUNT(*) AS n FROM submissions WHERE reviewer_name_original <> '' GROUP BY reviewer_name_original ORDER BY name").fetchall()
     return [dict(r) for r in trainers], [dict(r) for r in reviewers]
 
+def _unprefix(d):
+    """group/field -> field عندما يكون الاسم القصير فريداً، ليطابق processing.py أسماء الأعمدة المتوقعة."""
+    from collections import Counter
+    short = {k: k.rsplit('/', 1)[-1] for k in d}
+    cnt = Counter(short.values())
+    return {(short[k] if cnt[short[k]] == 1 else k): v for k, v in d.items()}
+
 def get_submissions(province='all', date_from='', date_to=''):
-    sql = 'SELECT raw_json FROM submissions WHERE 1=1'
+    sql = 'SELECT raw_json, trainer_name_original, reviewer_name_original, province AS prov, percentage AS pct, end_time AS endt FROM submissions WHERE 1=1'
     args = []
     if province and province != 'all':
         sql += ' AND province=%s'
         args.append(province)
     if date_from:
-        sql += " AND SUBSTR(end_time, 1, 10)::DATE >= %s::DATE"
+        sql += " AND NULLIF(SUBSTR(end_time, 1, 10), '')::DATE >= %s::DATE"
         args.append(date_from)
     if date_to:
-        sql += " AND SUBSTR(end_time, 1, 10)::DATE <= %s::DATE"
+        sql += " AND NULLIF(SUBSTR(end_time, 1, 10), '')::DATE <= %s::DATE"
         args.append(date_to)
     sql += ' ORDER BY end_time, CAST(source_id AS INTEGER)'
     with connect() as con:
         rows = con.execute(sql, args).fetchall()
-    return [json.loads(r['raw_json']) for r in rows]
+    out = []
+    for r in rows:
+        d = _unprefix(json.loads(r['raw_json']))
+        # توحيد الأعمدة: لو اختلفت أسماء الحقول بين نسخ الاستمارة نُكمل من الأعمدة المطبَّعة المحفوظة عند المزامنة
+        for key, val in (('الاسم الثلاثي للمدرب', r['trainer_name_original']),
+                         ('اسم المقيّم (الاسم والكنية)', r['reviewer_name_original']),
+                         ('المحافظة', r['prov']), ('percentage', r['pct']), ('end', r['endt'])):
+            if d.get(key) in (None, '') and val not in (None, ''):
+                d[key] = val
+        out.append(d)
+    return out
 
 def list_filter_values():
     with connect() as con:
