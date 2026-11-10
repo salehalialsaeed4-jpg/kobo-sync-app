@@ -1,5 +1,5 @@
 import json
-os, os
+import os
 import psycopg2
 import psycopg2.extras
 from pathlib import Path
@@ -89,7 +89,6 @@ class PostgresConnectionWrapper:
         return self
 
     def execute(self, query, params=None):
-        # محاكاة توافقية طريقة التنفيذ مع التعامل مع تحويل الفواصل إن أمكن
         self.cursor.execute(query, params or ())
         return self.cursor
 
@@ -137,7 +136,6 @@ def add_candidate(full_name, province, normalized_name, normalized_province):
             row = cur.fetchone()
             return row['id'], None
         except Exception:
-            # حدوث تكرار بناءً على القيود الفريدة Unique Constraint
             con.conn.rollback()
             row = con.execute('''
                 SELECT id, full_name, province FROM candidates 
