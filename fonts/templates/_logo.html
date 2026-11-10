@@ -1,0 +1,7 @@
+{% macro mark(cls='', light=False) -%}
+<svg class="{{cls}}" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+<defs><linearGradient id="lg{{ 'l' if light else 'd' }}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="{{ '#7FD3F0' if light else '#28A3CC' }}"/><stop offset="1" stop-color="{{ '#28A3CC' if light else '#125A78' }}"/></linearGradient></defs>
+<path fill="url(#lg{{ 'l' if light else 'd' }})" fill-rule="evenodd" d="M 0,50 L 16.75,66.37 L 20.49,62.5 L 8.38,49.87 L 50.13,8.51 L 91.49,49.87 L 79.38,62.5 L 83.12,66.37 L 99.87,50.26 L 49.87,0 Z M 19.2,68.94 L 28.87,77.96 L 30.67,75.9 L 24.48,68.94 L 50.26,43.69 L 75.39,68.94 L 69.2,75.9 L 71.13,78.09 L 80.67,69.46 L 50,38.4 Z M 30.93,80.93 L 35.7,86.08 L 36.98,86.47 L 37.89,84.92 L 34.15,80.93 L 50,65.21 L 65.72,80.93 L 61.86,85.05 L 62.89,86.47 L 64.05,86.21 L 68.94,81.19 L 50,62.11 Z"/>
+<path fill="#E4C874" d="M 49.87,78.61 L 39.3,89.43 L 50.13,100 L 60.57,89.18 Z"/>
+</svg>
+{%- endmacro %}

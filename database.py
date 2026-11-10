@@ -87,6 +87,12 @@ CREATE TABLE IF NOT EXISTS primary_choices (
  PRIMARY KEY(trainer_key, province_key)
 );
 
+CREATE TABLE IF NOT EXISTS provinces (
+ code TEXT PRIMARY KEY,
+ name TEXT NOT NULL UNIQUE,
+ sort_order INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS name_batches (
  id SERIAL PRIMARY KEY,
  created_at TEXT NOT NULL,
@@ -104,7 +110,17 @@ ALTER TABLE sync_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE processing_runs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE primary_choices ENABLE ROW LEVEL SECURITY;
 ALTER TABLE name_batches ENABLE ROW LEVEL SECURITY;
+ALTER TABLE provinces ENABLE ROW LEVEL SECURITY;
 '''
+
+# المحافظات ورموزها كما في خيارات استمارة Kobo (قائمة w0_choices)
+PROVINCE_SEED = [
+    ('MHF-01', 'دمشق وريفها'), ('MHF-02', 'حلب'), ('MHF-03', 'حماه'), ('MHF-04', 'حمص'),
+    ('MHF-05', 'إدلب'), ('MHF-06', 'اللاذقية'), ('MHF-07', 'طرطوس'), ('MHF-08', 'دير الزور'),
+    ('MHF-09', 'الرقة'), ('MHF-10', 'الحسكة'), ('MHF-11', 'درعا'), ('MHF-12', 'القنيطرة'),
+    ('MHF-13', 'السويداء'),
+]
+
 
 def _clean_db_url():
     """يقرأ DATABASE_URL وينظّفه: مسافات/اقتباسات/CRLF، ويضيف sslmode و connect_timeout."""
@@ -190,6 +206,8 @@ def init_db():
     with connect() as con:
         con.execute(SCHEMA)
         con.execute("INSERT INTO sync_state(key, value) VALUES('last_id', '0') ON CONFLICT (key) DO NOTHING")
+        for i, (code, name) in enumerate(PROVINCE_SEED, 1):
+            con.execute('INSERT INTO provinces(code, name, sort_order) VALUES(%s,%s,%s) ON CONFLICT (code) DO NOTHING', (code, name, i))
 
 def ensure_db():
     """تهيئة الجداول مرة واحدة؛ تُعاد المحاولة عند أي طلب إذا فشلت سابقاً (بدل إسقاط التطبيق عند الإقلاع)."""
@@ -257,11 +275,105 @@ def save_alias(entity_type, original_name, normalized_original, canonical_name):
             original_name=EXCLUDED.original_name, canonical_name=EXCLUDED.canonical_name, approved_at=EXCLUDED.approved_at
         ''', (entity_type, original_name, normalized_original, canonical_name, datetime.now(timezone.utc).isoformat()))
 
-def list_name_values():
+# ---------------------------------------------------------------- النطاق (المحافظات + تاريخ Kobo)
+# المحافظة المخزنة قد تكون الرمز (MHF-03) أو الاسم؛ نربطها بالجدول المرجعي بالحالتين.
+_BASE = """
+FROM submissions s
+LEFT JOIN provinces p ON p.code = TRIM(s.province) OR p.name = TRIM(s.province)
+WHERE 1=1
+"""
+_PCODE = "COALESCE(p.code, TRIM(s.province))"
+_PNAME = "COALESCE(p.name, TRIM(s.province))"
+# تاريخ Kobo التلقائي = وقت الإرسال، وإن غاب فوقت نهاية الاستمارة
+_KDATE = "NULLIF(SUBSTR(COALESCE(NULLIF(s.submission_time, ''), s.end_time), 1, 10), '')"
+
+
+def _scope_where(provinces, date_from, date_to):
+    sql, args = '', []
+    if provinces:
+        sql += f' AND {_PCODE} = ANY(%s)'
+        args.append(list(provinces))
+    if date_from:
+        sql += f' AND {_KDATE}::DATE >= %s::DATE'
+        args.append(date_from)
+    if date_to:
+        sql += f' AND {_KDATE}::DATE <= %s::DATE'
+        args.append(date_to)
+    return sql, args
+
+
+def _scope_args(scope):
+    scope = scope or {}
+    return scope.get('provinces') or [], scope.get('date_from') or '', scope.get('date_to') or ''
+
+
+def list_provinces():
+    """المحافظات الموجودة فعلاً في البيانات (بالترتيب المرجعي) مع عدد الاستجابات."""
     with connect() as con:
-        trainers = con.execute("SELECT trainer_name_original AS name, COUNT(*) AS n FROM submissions WHERE trainer_name_original <> '' GROUP BY trainer_name_original ORDER BY name").fetchall()
-        reviewers = con.execute("SELECT reviewer_name_original AS name, COUNT(*) AS n FROM submissions WHERE reviewer_name_original <> '' GROUP BY reviewer_name_original ORDER BY name").fetchall()
-    return [dict(r) for r in trainers], [dict(r) for r in reviewers]
+        rows = con.execute(f"""
+            SELECT {_PCODE} AS code, {_PNAME} AS name, COUNT(*) AS n, MIN(COALESCE(p.sort_order, 999)) AS so
+            {_BASE} AND TRIM(s.province) <> ''
+            GROUP BY 1, 2 ORDER BY so, name
+        """).fetchall()
+    return [{'code': r['code'], 'name': r['name'], 'n': r['n']} for r in rows]
+
+
+def list_dates_by_province():
+    """{رمز المحافظة: [تواريخ Kobo المتاحة]} لتفاعل الفلتر."""
+    with connect() as con:
+        rows = con.execute(f"""
+            SELECT {_PCODE} AS code, {_KDATE} AS d
+            {_BASE} AND TRIM(s.province) <> '' AND {_KDATE} IS NOT NULL
+            GROUP BY 1, 2 ORDER BY 2
+        """).fetchall()
+    out = {}
+    for r in rows:
+        out.setdefault(r['code'], []).append(r['d'])
+    return out
+
+
+def _interview_dt(raw):
+    for k, v in raw.items():
+        if k.rsplit('/', 1)[-1] in ('interview_datetime', 'تاريخ ووقت المقابلة') and v not in (None, ''):
+            return str(v)
+    return ''
+
+
+def list_scope_rows(scope, limit=2000):
+    """صفوف النطاق للعرض: المرشح، المقيّم، المحافظة، تاريخ Kobo، تاريخ المقيّم، النتيجة."""
+    provinces, d_from, d_to = _scope_args(scope)
+    where, args = _scope_where(provinces, d_from, d_to)
+    with connect() as con:
+        total = con.execute(f'SELECT COUNT(*) AS c {_BASE}{where}', args).fetchone()['c']
+        rows = con.execute(f"""
+            SELECT s.source_id, s.trainer_name_original AS trainer, s.reviewer_name_original AS reviewer,
+                   {_PNAME} AS province, {_KDATE} AS kdate, s.percentage AS pct, s.raw_json
+            {_BASE}{where}
+            ORDER BY {_KDATE}, CAST(s.source_id AS INTEGER) LIMIT {int(limit)}
+        """, args).fetchall()
+    out = []
+    for r in rows:
+        try:
+            raw = json.loads(r['raw_json'])
+        except ValueError:
+            raw = {}
+        out.append({'id': r['source_id'], 'trainer': r['trainer'], 'reviewer': r['reviewer'],
+                    'province': r['province'], 'kobo_date': r['kdate'] or '',
+                    'eval_date': _interview_dt(raw)[:16].replace('T', ' '),
+                    'score': r['pct']})
+    return out, total
+
+
+def list_name_values(scope=None):
+    """الأسماء الأصلية وعدد ظهورها ضمن النطاق (scope=None: كل قاعدة البيانات)."""
+    provinces, d_from, d_to = _scope_args(scope)
+    where, args = _scope_where(provinces, d_from, d_to)
+    out = []
+    with connect() as con:
+        for col in ('trainer_name_original', 'reviewer_name_original'):
+            rows = con.execute(f"SELECT s.{col} AS name, COUNT(*) AS n {_BASE}{where} AND s.{col} <> '' GROUP BY s.{col} ORDER BY name", args).fetchall()
+            out.append([dict(r) for r in rows])
+    return out[0], out[1]
 
 def _unprefix(d):
     """group/field -> field عندما يكون الاسم القصير فريداً، ليطابق processing.py أسماء الأعمدة المتوقعة."""
@@ -270,19 +382,13 @@ def _unprefix(d):
     cnt = Counter(short.values())
     return {(short[k] if cnt[short[k]] == 1 else k): v for k, v in d.items()}
 
-def get_submissions(province='all', date_from='', date_to=''):
-    sql = 'SELECT raw_json, trainer_name_original, reviewer_name_original, province AS prov, percentage AS pct, end_time AS endt FROM submissions WHERE 1=1'
-    args = []
-    if province and province != 'all':
-        sql += ' AND province=%s'
-        args.append(province)
-    if date_from:
-        sql += " AND NULLIF(SUBSTR(end_time, 1, 10), '')::DATE >= %s::DATE"
-        args.append(date_from)
-    if date_to:
-        sql += " AND NULLIF(SUBSTR(end_time, 1, 10), '')::DATE <= %s::DATE"
-        args.append(date_to)
-    sql += ' ORDER BY end_time, CAST(source_id AS INTEGER)'
+def get_submissions(scope):
+    """استجابات النطاق جاهزة للمعالجة؛ المحافظة تُوحَّد إلى اسمها من الجدول المرجعي."""
+    provinces, d_from, d_to = _scope_args(scope)
+    where, args = _scope_where(provinces, d_from, d_to)
+    sql = f"""SELECT s.raw_json, s.trainer_name_original, s.reviewer_name_original, {_PNAME} AS prov,
+              s.percentage AS pct, s.end_time AS endt {_BASE}{where}
+              ORDER BY s.end_time, CAST(s.source_id AS INTEGER)"""
     with connect() as con:
         rows = con.execute(sql, args).fetchall()
     out = []
@@ -291,17 +397,14 @@ def get_submissions(province='all', date_from='', date_to=''):
         # توحيد الأعمدة: لو اختلفت أسماء الحقول بين نسخ الاستمارة نُكمل من الأعمدة المطبَّعة المحفوظة عند المزامنة
         for key, val in (('الاسم الثلاثي للمدرب', r['trainer_name_original']),
                          ('اسم المقيّم (الاسم والكنية)', r['reviewer_name_original']),
-                         ('المحافظة', r['prov']), ('percentage', r['pct']), ('end', r['endt'])):
+                         ('percentage', r['pct']), ('end', r['endt'])):
             if d.get(key) in (None, '') and val not in (None, ''):
                 d[key] = val
+        d['المحافظة'] = r['prov']          # الاسم المرجعي دائماً، لا الرمز
+        if 'w0' in d:
+            d['w0'] = r['prov']
         out.append(d)
     return out
-
-def list_filter_values():
-    with connect() as con:
-        provinces = [r['province'] for r in con.execute("SELECT DISTINCT province FROM submissions WHERE province <> '' ORDER BY province").fetchall()]
-        dates = [r['sub'] for r in con.execute("SELECT DISTINCT SUBSTR(end_time, 1, 10) AS sub FROM submissions WHERE end_time <> '' ORDER BY 1").fetchall()]
-    return provinces, dates
 
 def save_processing_run(province, date_from, date_to, rows):
     payload = json.dumps(rows, ensure_ascii=False, default=str)

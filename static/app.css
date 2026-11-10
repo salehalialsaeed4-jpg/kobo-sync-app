@@ -237,3 +237,27 @@ details.notes pre{white-space:pre-wrap;font:inherit;background:var(--soft);borde
 .cand-h+.rv,.cand-h+label.rv{border-top:0}
 input[type=search]{appearance:none}
 .cand,.rv{scroll-margin-block:110px}
+
+/* ---- تحديد النطاق + جدول الدمج ---- */
+.provs{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+.pchk{display:inline-flex;align-items:center;gap:8px;margin:0;font-weight:500;background:var(--soft);border:1px solid var(--line);border-radius:10px;padding:6px 12px;cursor:pointer}
+.pchk input{width:auto;margin:0}
+.pchk.all{background:#FFFBEA;border-color:var(--gold)}
+table.grid{font-size:.92rem}
+table.grid th{background:var(--soft);text-align:right;padding:9px 12px;border-bottom:2px solid var(--line);position:sticky;top:0;white-space:nowrap}
+table.grid td{padding:8px 12px;border-bottom:1px solid var(--line-2);vertical-align:top}
+table.grid td.num{white-space:nowrap;font-variant-numeric:tabular-nums}
+#tpanel .tablewrap{max-height:420px;overflow:auto}
+.mrg td.rvc{padding:0}
+.rvl{display:grid;grid-template-columns:auto 1fr auto auto auto;gap:10px;align-items:center;padding:7px 12px;border-top:1px solid var(--line-2)}
+.rvl:first-child{border-top:0}
+.rvl.sel{background:#FFFBEA}
+.chk{width:30px;height:30px;border-radius:8px;border:2px solid #A9C0CB;background:#fff;color:transparent;font-size:1.1rem;line-height:1;cursor:pointer;padding:0}
+.chk[aria-pressed=true]{background:var(--gold);border-color:var(--gold);color:var(--ink);font-weight:700}
+.chk[disabled]{visibility:hidden}
+.rvl .sc{font-weight:700;min-width:42px;text-align:center}
+.rvl .dt{color:var(--muted);font-size:.82rem;white-space:nowrap}
+.rvl.sel .wpill{background:var(--gold);color:var(--ink)}
+.mrg tr.missing{background:#FFF7DD}
+.mrg tr.bad{background:var(--bad-bg)}
+.exp{font-weight:700;font-size:1.05rem;text-align:center;white-space:nowrap}

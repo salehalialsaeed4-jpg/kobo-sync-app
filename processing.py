@@ -100,7 +100,9 @@ def candidate_groups(df):
         reviewers = []
         for _, r in group.iterrows():
             score = pd.to_numeric(r.get(cols['score']), errors='coerce')
-            reviewers.append({'name': r['_reviewer'], 'score': None if pd.isna(score) else round(float(score), 2)})
+            dt = r['_time']
+            reviewers.append({'name': r['_reviewer'], 'score': None if pd.isna(score) else round(float(score), 2),
+                              'date': '' if pd.isna(dt) else dt.strftime('%Y-%m-%d')})
         out.append({'trainer': trainer, 'province': province, 'reviewers': reviewers,
                     'key': candidate_key(trainer, province)})
     out.sort(key=lambda g: (g['province'], g['trainer']))

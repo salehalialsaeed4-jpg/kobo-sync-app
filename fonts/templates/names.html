@@ -1,0 +1,54 @@
+{% extends 'base.html' %}{% block body %}
+<div class="pagehead"><div><h1>معالجة الأسماء</h1>
+<p class="lead">الأسماء ضمن النطاق: <b>{{ scope_label }}</b>. دقّق جدول المرشحين وجدول المقيّمين (بالتبويبين). التعديلات مسودة حتى تضغط «اعتماد كل التغييرات»، وبعدها تُحفظ في قاعدة البيانات وتُطبَّق تلقائياً في أي معالجة لاحقة. بعد الاعتماد يظهر «الجدول النظيف».</p></div>
+<a class="btn ghost" href="{{ url_for('process') }}">تعديل النطاق</a></div>
+
+{% if last_batch %}<div class="undo-note" id="undo-note"><span class="dia" style="color:var(--teal)"></span><span>آخر اعتماد: <b>{{ last_batch.summary }}</b> ({{ last_batch.created_at[:16].replace('T',' ') }})</span>
+<button type="button" class="btn ghost sm" id="undo-btn">تراجع عن آخر اعتماد</button></div>{% endif %}
+
+<div class="toolbar">
+  <div class="tools">
+    <div class="tabs" role="tablist" aria-label="نوع الأسماء">
+      <button type="button" role="tab" data-tab="trainer" aria-selected="true">المرشحون<span class="cnt" data-badge="trainer"></span></button>
+      <button type="button" role="tab" data-tab="reviewer" aria-selected="false">المقيّمون<span class="cnt" data-badge="reviewer"></span></button>
+    </div>
+    <input class="search" type="search" id="q" placeholder="ابحث عن اسم…" aria-label="بحث" autocomplete="off">
+    <div class="chips" id="chips" role="group" aria-label="تصفية"></div>
+    <button type="button" class="btn ghost sm" id="confirm-green" style="margin-inline-start:auto">تأكيد كل المطابقات المطمئنة</button>
+  </div>
+  <div class="progress" aria-hidden="true"><i id="bar" style="width:0"></i></div>
+</div>
+
+<div id="list" aria-live="polite"></div>
+
+<div class="nextbar" style="margin-top:26px">
+  <div><b id="cont-t">…</b><p id="cont-s"></p></div>
+  <form method="post" action="{{ url_for('names_continue') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button class="gold" id="cont" disabled>متابعة إلى المعالجة والدمج</button></form>
+</div>
+{% endblock %}
+
+{% block foot %}
+<div class="commitbar" id="cbar"><div class="commitbar-in">
+  <div class="sum"><b id="c-sum"></b><span id="c-sub"></span></div>
+  <button type="button" class="btn ghost" id="c-discard">تجاهل التعديلات</button>
+  <button type="button" class="btn gold" id="c-review">مراجعة واعتماد كل التغييرات</button>
+</div></div>
+
+<dialog id="d-commit"><div class="dlg-h"><h2>اعتماد كل التغييرات</h2><p class="muted" id="d-sub"></p></div>
+<div class="dlg-b" id="d-list"></div>
+<div class="dlg-f"><button type="button" class="btn gold" id="d-ok">اعتماد كل التغييرات</button><button type="button" class="btn ghost" id="d-cancel">رجوع</button></div></dialog>
+
+<dialog id="d-move"><div class="dlg-h"><h2>نقل الاسم إلى مجموعة</h2><p class="muted" id="m-sub"></p></div>
+<div class="dlg-b"><label for="m-in">اسم المجموعة الهدف</label><input id="m-in" list="m-names" autocomplete="off"><datalist id="m-names"></datalist>
+<p class="hint">اختر اسماً موجوداً لنقله إلى تلك المجموعة، أو اكتب اسماً جديداً لإنشاء مجموعة.</p></div>
+<div class="dlg-f"><button type="button" class="btn gold" id="m-ok">نقل</button><button type="button" class="btn ghost" id="m-cancel">إلغاء</button></div></dialog>
+
+<dialog id="d-undo"><div class="dlg-h"><h2>التراجع عن آخر اعتماد</h2></div>
+<div class="dlg-b"><p>سيعود النظام إلى حالة الأسماء قبل آخر اعتماد. تُفقد أي تعديلات غير معتمدة في المسودة الحالية.</p></div>
+<div class="dlg-f"><button type="button" class="btn gold" id="u-ok">تراجع</button><button type="button" class="btn ghost" id="u-cancel">إلغاء</button></div></dialog>
+
+<script id="names-data" type="application/json">{{ data_json|safe }}</script>
+<script>window.NAMES_CFG={csrf:{{ csrf_token|tojson }},commit:{{ url_for('names_commit')|tojson }},undo:{{ url_for('names_undo')|tojson }}};</script>
+<script src="{{ url_for('static', filename='names.js') }}"></script>
+{% endblock %}

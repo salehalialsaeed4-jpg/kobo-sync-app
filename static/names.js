@@ -53,10 +53,11 @@ var STATUS={amber:['warn','تحتاج مراجعتك'],green:['info','مطابق
 function render(){
   var t=S.tab, all=groupsOf(t), q=norm(S.q);
   var cnt={};all.forEach(function(g){var k=(g.status==='amber'||g.status==='green')?'pending':g.status;cnt[k]=(cnt[k]||0)+1;});
-  var chips=[['pending','تحتاج قراراً'],['ready','جاهزة'],['committed','معتمدة'],['single','فريدة'],['all','الكل']];
+  var chips=[['pending','تحتاج قراراً'],['ready','جاهزة'],['clean','الجدول النظيف'],['committed','معتمدة'],['single','فريدة'],['all','الكل']];
   var cw=$('chips');cw.textContent='';
-  chips.forEach(function(c){var n=c[0]==='all'?all.length:(cnt[c[0]]||0);
+  chips.forEach(function(c){var n=(c[0]==='all'||c[0]==='clean')?all.length:(cnt[c[0]]||0);
     cw.appendChild(h('button',{type:'button',class:'chip','aria-pressed':String(S.filter===c[0]),text:c[1]+' '+n,onclick:function(){S.filter=c[0];S.shown=PAGE;render();}}));});
+  if(S.filter==='clean'){cleanTable(all,q);chrome(all);return;}
   var list=all.filter(function(g){
     var k=(g.status==='amber'||g.status==='green')?'pending':g.status;
     if(S.filter!=='all'&&k!==S.filter)return false;
@@ -68,6 +69,17 @@ function render(){
   list.slice(0,S.shown).forEach(function(g){box.appendChild(card(t,g));});
   if(list.length>S.shown)box.appendChild(h('div',{style:'text-align:center;margin-top:16px'},h('button',{type:'button',class:'btn ghost',text:'عرض المزيد ('+(list.length-S.shown)+')',onclick:function(){S.shown+=PAGE;render();}})));
   chrome(all);
+}
+function cleanTable(all,q){
+  var box=$('list');box.textContent='';
+  var rows=all.filter(function(g){return !q||norm(g.canonical).indexOf(q)>=0||g.members.some(function(m){return norm(m.name).indexOf(q)>=0;});});
+  var pend=all.filter(function(g){return g.status==='amber'||g.status==='green';}).length;
+  if(pend||changes().total)box.appendChild(h('div',{class:'flash warning',style:'margin-top:14px',text:'هذا الجدول يعكس الحالة الحالية وبه '+(pend||0)+' مجموعة لم تُحسم'+(changes().total?' وتعديلات غير معتمدة':'')+'. الجدول النهائي يثبت بعد الاعتماد.'}));
+  var tb=h('tbody');
+  rows.forEach(function(g,i){tb.appendChild(h('tr',null,h('td',{class:'num',text:String(i+1)}),h('td',null,h('b',{text:g.canonical})),
+    h('td',{text:g.members.length>1?g.members.map(function(m){return m.name}).join('، '):'—'}),h('td',{class:'num',text:String(g.total)})));});
+  box.appendChild(h('section',{class:'panel flush',style:'margin-top:14px'},h('div',{class:'tablewrap'},
+    h('table',{class:'grid'},h('thead',null,h('tr',null,h('th',{text:'م'}),h('th',{text:LBL[S.tab]+' (الاسم المعتمد)'}),h('th',{text:'الصيغ الأصلية المدمجة'}),h('th',{text:'عدد الاستجابات'}))),tb))));
 }
 function card(t,g){
   var st=STATUS[g.status], multi=g.members.length>1, c=g.status;
@@ -153,5 +165,6 @@ document.querySelectorAll('.tabs button').forEach(function(b){b.onclick=function
 $('q').addEventListener('input',function(){S.q=this.value;S.shown=PAGE;render();});
 $('confirm-green').onclick=function(){groupsOf(S.tab).forEach(function(g){if(g.status==='green')g.members.forEach(function(m){draft[S.tab][m.name]={c:g.canonical,f:true};});});save();render();};
 window.addEventListener('beforeunload',function(e){if(!window.__saved&&changes().total){e.preventDefault();e.returnValue='';}});
+(function(){var p=['trainer','reviewer'].some(function(t){return groupsOf(t).some(function(g){return g.status==='amber'||g.status==='green';});});if(!p)S.filter='clean';})();
 render();
 })();

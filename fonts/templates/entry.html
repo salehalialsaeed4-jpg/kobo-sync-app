@@ -1,0 +1,20 @@
+{% extends 'base.html' %}{% block body %}
+<div class="pagehead"><div><h1>تسجيل المرشحين</h1><p class="lead">سجّل كل مرشح بالاسم الثلاثي ومحافظته. يمنع النظام التكرار حتى لو اختلفت الهمزات أو التاء المربوطة.</p></div>
+<span class="badge">{{ total }} مرشح مسجل</span></div>
+<section class="panel">
+  <form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="grid2">
+      <div class="field"><label for="fn">الاسم الثلاثي</label><input id="fn" name="full_name" placeholder="مثال: أحمد محمد الخطيب" required autocomplete="off"></div>
+      <div class="field"><label for="pv">المحافظة</label><select id="pv" name="province" required><option value="">اختر المحافظة</option>{% for p in provinces %}<option>{{p}}</option>{% endfor %}</select></div>
+    </div>
+    <button class="gold">إضافة المرشح</button>
+  </form>
+</section>
+<section class="panel flush">
+  <div class="panel-head"><h2>آخر المرشحين المسجلين</h2></div>
+  {% if candidates %}<div class="tablewrap"><table>
+    <thead><tr><th class="num">#</th><th>الاسم</th><th>المحافظة</th><th>تاريخ التسجيل</th></tr></thead>
+    <tbody>{% for c in candidates %}<tr><td class="num">{{ c.id }}</td><td><b>{{ c.full_name }}</b></td><td>{{ c.province }}</td><td class="muted">{{ c.created_at[:16].replace('T',' ') }}</td></tr>{% endfor %}</tbody></table></div>
+  {% else %}<div class="empty"><b>لا يوجد مرشحون بعد</b>أضف أول مرشح من النموذج أعلاه.</div>{% endif %}
+</section>
+{% endblock %}

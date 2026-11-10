@@ -1,0 +1,85 @@
+{% extends 'base.html' %}{% block body %}
+<div class="pagehead"><div><h1>تحديد نطاق المعالجة</h1>
+<p class="lead">اختر محافظة أو أكثر، ثم الفترة (بتاريخ Kobo). يظهر لك جدول البيانات ضمن النطاق، وبعد التأكيد تنتقل إلى معالجة الأسماء.</p></div></div>
+
+<form method="post" id="sform"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<section class="panel">
+  <div class="field"><label>المحافظات <span class="muted small">(يمكن اختيار أكثر من محافظة)</span></label>
+    <div class="provs" id="provs">
+      <label class="pchk all"><input type="checkbox" id="pall"> <span>كل المحافظات</span></label>
+      {% for p in provinces %}<label class="pchk"><input type="checkbox" name="provinces" value="{{ p.code }}"> <span>{{ p.name }}</span> <small class="muted">{{ p.code }} · {{ p.n }}</small></label>{% endfor %}
+    </div></div>
+  <div class="grid2">
+    <div class="field"><label for="df">من تاريخ (Kobo)</label><select id="df" name="date_from"></select></div>
+    <div class="field"><label for="dt">إلى تاريخ (Kobo)</label><select id="dt" name="date_to"></select></div>
+  </div>
+  <p class="hint" id="dhint"></p>
+</section>
+
+<section class="panel flush" id="tpanel">
+  <div class="tablewrap"><table class="grid" id="stbl">
+    <thead><tr><th>م</th><th>المرشح</th><th>المقيّم</th><th>المحافظة</th><th>تاريخ Kobo</th><th>تاريخ المقيّم</th><th>النتيجة</th></tr></thead>
+    <tbody></tbody></table></div>
+</section>
+
+<div class="mergebar">
+  <div class="st"><b id="sstate">…</b><div class="small muted" id="ssub"></div></div>
+  <button class="gold" id="sbtn" disabled>تأكيد والانتقال إلى معالجة الأسماء</button>
+</div>
+</form>
+
+<script>
+(function(){
+var DATES={{ dates_json|safe }}, SAVED={{ scope_json|safe }};
+var boxes=[].slice.call(document.querySelectorAll('input[name=provinces]'));
+var pall=document.getElementById('pall'), df=document.getElementById('df'), dt=document.getElementById('dt');
+var tb=document.querySelector('#stbl tbody'), seq=0;
+function $(i){return document.getElementById(i)}
+function sel(){return boxes.filter(function(b){return b.checked}).map(function(b){return b.value})}
+function availDates(){
+  var s=sel(), set={}; (s.length?s:Object.keys(DATES)).forEach(function(c){(DATES[c]||[]).forEach(function(d){set[d]=1})});
+  return Object.keys(set).sort();
+}
+function fill(selEl,list,ph,keep){
+  selEl.textContent='';
+  var o=document.createElement('option');o.value='';o.textContent=ph;selEl.appendChild(o);
+  list.forEach(function(d){var x=document.createElement('option');x.value=d;x.textContent=d;selEl.appendChild(x);});
+  selEl.value=list.indexOf(keep)>=0?keep:'';
+}
+function dates(){
+  var l=availDates(), f=df.value, t=dt.value;
+  fill(df,l,'من البداية',f); fill(dt,l,'حتى النهاية',t);
+  $('dhint').textContent=l.length?('التواريخ المتاحة للمحافظات المختارة: من '+l[0]+' إلى '+l[l.length-1]+' ('+l.length+' يوماً).'):'لا توجد تواريخ.';
+}
+function td(txt,cls){var c=document.createElement('td');c.textContent=txt==null?'':txt;if(cls)c.className=cls;return c}
+function load(){
+  var my=++seq, q=new URLSearchParams();
+  sel().forEach(function(c){q.append('provinces',c)});
+  if(df.value)q.set('date_from',df.value); if(dt.value)q.set('date_to',dt.value);
+  $('sstate').textContent='جارٍ تحميل البيانات…'; $('sbtn').disabled=true;
+  fetch('{{ url_for("process_data") }}?'+q.toString()).then(function(r){return r.json()}).then(function(d){
+    if(my!==seq)return;
+    tb.textContent='';
+    d.rows.forEach(function(r,i){var tr=document.createElement('tr');
+      tr.appendChild(td(i+1,'num'));tr.appendChild(td(r.trainer));tr.appendChild(td(r.reviewer));tr.appendChild(td(r.province));
+      tr.appendChild(td(r.kobo_date,'num'));tr.appendChild(td(r.eval_date,'num'));tr.appendChild(td(r.score==null?'—':+(+r.score).toFixed(2),'num'));
+      tb.appendChild(tr);});
+    var cut=d.total>d.rows.length;
+    $('sstate').textContent=d.total?('النطاق يضم '+d.total+' استجابة'):'لا توجد استجابات ضمن هذا النطاق';
+    $('ssub').textContent=cut?('المعروض أول '+d.rows.length+' فقط؛ كل الاستجابات تدخل المعالجة.'):(d.total?'راجع الجدول ثم أكّد للانتقال إلى معالجة الأسماء.':'غيّر المحافظة أو الفترة.');
+    $('sbtn').disabled=!d.total;
+  }).catch(function(){if(my===seq){$('sstate').textContent='تعذر تحميل البيانات';$('ssub').textContent='أعد تحميل الصفحة.';}});
+}
+function sync(){pall.checked=boxes.length>0&&boxes.every(function(b){return b.checked});}
+boxes.forEach(function(b){b.addEventListener('change',function(){sync();dates();load();});});
+pall.addEventListener('change',function(){boxes.forEach(function(b){b.checked=pall.checked});dates();load();});
+df.addEventListener('change',load); dt.addEventListener('change',load);
+// استعادة النطاق المحفوظ
+(SAVED.provinces||[]).forEach(function(c){boxes.forEach(function(b){if(b.value===c)b.checked=true})});
+if(!(SAVED.provinces||[]).length&&SAVED.date_from!==undefined){boxes.forEach(function(b){b.checked=true});}
+sync(); dates();
+if(SAVED.date_from)df.value=SAVED.date_from; if(SAVED.date_to)dt.value=SAVED.date_to;
+load();
+})();
+</script>
+{% endblock %}

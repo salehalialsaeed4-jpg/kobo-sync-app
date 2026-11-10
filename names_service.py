@@ -22,8 +22,8 @@ def _reasons(members, canonical):
     return sorted(set(reasons))
 
 
-def build_groups(entity_type):
-    rows = list_name_values()[0 if entity_type == 'trainer' else 1]
+def build_groups(entity_type, scope=None):
+    rows = list_name_values(scope)[0 if entity_type == 'trainer' else 1]
     if not rows:
         return [], ''
     aliases = get_alias_rows(entity_type)
@@ -62,6 +62,6 @@ def build_groups(entity_type):
     return groups, sig
 
 
-def unresolved_count(entity_type):
-    groups, _ = build_groups(entity_type)
+def unresolved_count(entity_type, scope=None):
+    groups, _ = build_groups(entity_type, scope)
     return sum(1 for g in groups if g['status'] == 'amber')

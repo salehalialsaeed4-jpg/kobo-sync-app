@@ -4,7 +4,7 @@ from functools import wraps
 from flask import Flask, render_template, request, redirect, url_for, flash, session, send_file, jsonify, g
 import pandas as pd
 from database import (ensure_db, db_ok, connect, count_submissions, get_state, add_candidate, list_name_values,
-                      get_submissions, list_filter_values, save_processing_run, get_processing_run,
+                      get_submissions, list_provinces, list_dates_by_province, list_scope_rows, save_processing_run, get_processing_run,
                       list_candidate_keys, workflow_snapshot, set_states, now_iso, fail_stale_syncs,
                       get_primary_choices, save_primary_choices, apply_name_changes, last_name_batch,
                       undo_last_name_batch)
@@ -33,14 +33,15 @@ PROVINCES = ['دمشق وريفها', 'حلب', 'حماه', 'حمص', 'إدلب'
 # ---------------------------------------------------------------- المسار الموجّه
 STEPS = [
     (1, 'sync',    'المزامنة',        'dashboard'),
-    (2, 'names',   'مطابقة الأسماء',  'names'),
-    (3, 'scope',   'تحديد النطاق',    'process'),
-    (4, 'preview', 'المعاينة والأوزان', 'preview'),
+    (2, 'scope',   'تحديد النطاق',    'process'),
+    (3, 'names',   'معالجة الأسماء',  'names'),
+    (4, 'preview', 'المعالجة والدمج', 'preview'),
     (5, 'results', 'النتائج',         'results'),
 ]
 ENDPOINT_STEP = {'dashboard': 1, 'sync': 1, 'kobo_check': 1,
-                 'names': 2, 'names_commit': 2, 'names_undo': 2, 'names_continue': 2,
-                 'process': 3, 'preview': 4, 'merge': 4, 'results': 5, 'export': 5}
+                 'process': 2, 'process_data': 2,
+                 'names': 3, 'names_commit': 3, 'names_undo': 3, 'names_continue': 3,
+                 'preview': 4, 'merge': 4, 'results': 5, 'export': 5}
 
 
 def step_url(n, snap):
@@ -51,7 +52,8 @@ def step_url(n, snap):
 
 def compute_steps(snap):
     done = {1: snap['submissions'] > 0 and bool(snap['last_success_at']),
-            2: snap['names_ok'], 3: snap['scope'] is not None, 4: snap['merged_run'] is not None}
+            2: bool(snap['scope'] and 'provinces' in snap['scope']), 3: snap['names_ok'],
+            4: snap['merged_run'] is not None}
     unlocked = {1: True, 2: done[1], 3: done[1] and done[2], 4: done[1] and done[2] and done[3],
                 5: done[4]}
     return done, unlocked
@@ -237,33 +239,80 @@ def kobo_check():
         return jsonify(status='error', error=str(e)), 502
 
 
-# ---------------------------------------------------------------- 2) مطابقة الأسماء
-@app.route('/names')
+# ---------------------------------------------------------------- 2) النطاق
+def _scope_summary(scope, provinces=None):
+    provinces = provinces if provinces is not None else list_provinces()
+    names = {p['code']: p['name'] for p in provinces}
+    sel = scope.get('provinces') or []
+    label = 'كل المحافظات' if not sel else '، '.join(names.get(c, c) for c in sel)
+    return label
+
+
+@app.route('/process', methods=['GET', 'POST'])
 @roles_required('admin')
 @step_required(2)
+def process():
+    provinces = list_provinces()
+    codes = {p['code'] for p in provinces}
+    if request.method == 'POST':
+        sel = [c for c in request.form.getlist('provinces') if c]
+        date_from = request.form.get('date_from', ''); date_to = request.form.get('date_to', '')
+        if any(c not in codes for c in sel):
+            flash('محافظة غير صالحة.', 'warning')
+        elif date_from and date_to and date_from > date_to:
+            flash('تاريخ البداية بعد تاريخ النهاية.', 'warning')
+        else:
+            scope = {'provinces': [] if len(sel) == len(codes) else sel, 'date_from': date_from, 'date_to': date_to}
+            _, total = list_scope_rows(scope, limit=1)
+            if not total:
+                flash('لا توجد استجابات ضمن النطاق المحدد.', 'warning')
+            else:
+                # نطاق جديد = أسماء ونتائج تُراجع من جديد (الأسماء المعتمدة سابقاً تبقى محفوظة)
+                set_states(wf_scope=json.dumps(scope, ensure_ascii=False), wf_names_ok_at='', wf_merged_run='')
+                return redirect(url_for('names'))
+    scope = _snap()['scope'] or {}
+    return render_template('process.html', provinces=provinces, dates_json=json.dumps(list_dates_by_province()),
+                           scope=scope, scope_json=json.dumps(scope, ensure_ascii=False))
+
+
+@app.route('/process/data')
+@roles_required('admin')
+@step_required(2)
+def process_data():
+    scope = {'provinces': [c for c in request.args.getlist('provinces') if c],
+             'date_from': request.args.get('date_from', ''), 'date_to': request.args.get('date_to', '')}
+    rows, total = list_scope_rows(scope)
+    return jsonify(rows=rows, total=total)
+
+
+# ---------------------------------------------------------------- 3) معالجة الأسماء (ضمن النطاق)
+@app.route('/names')
+@roles_required('admin')
+@step_required(3)
 def names():
+    scope = _snap()['scope']
     data = {}
     sigs = []
     pending = 0
     for typ in ('trainer', 'reviewer'):
-        groups, sig = build_groups(typ)
+        groups, sig = build_groups(typ, scope)
         data[typ] = groups
         sigs.append(sig)
         pending += sum(1 for x in groups if x['status'] == 'amber')
     return render_template('names.html', data_json=json.dumps({'groups': data, 'signature': '-'.join(sigs)}, ensure_ascii=False),
-                           pending=pending, last_batch=last_name_batch(),
+                           pending=pending, last_batch=last_name_batch(), scope=scope, scope_label=_scope_summary(scope),
                            counts={t: len(data[t]) for t in data})
 
 
 @app.route('/names/commit', methods=['POST'])
 @roles_required('admin')
-@step_required(2)
+@step_required(3)
 def names_commit():
     payload = request.get_json(silent=True) or {}
     changes = payload.get('changes')
     if not isinstance(changes, list) or not changes or len(changes) > 5000:
         return jsonify(ok=False, error='لا توجد تغييرات صالحة للاعتماد.'), 400
-    trainers, reviewers = list_name_values()
+    trainers, reviewers = list_name_values(_snap()['scope'])
     known = {'trainer': {r['name'] for r in trainers}, 'reviewer': {r['name'] for r in reviewers}}
     items = []
     for c in changes:
@@ -283,7 +332,7 @@ def names_commit():
 
 @app.route('/names/undo', methods=['POST'])
 @roles_required('admin')
-@step_required(2)
+@step_required(3)
 def names_undo():
     bid = undo_last_name_batch()
     if bid is None:
@@ -293,40 +342,20 @@ def names_undo():
 
 @app.route('/names/continue', methods=['POST'])
 @roles_required('admin')
-@step_required(2)
+@step_required(3)
 def names_continue():
-    left = unresolved_count('trainer') + unresolved_count('reviewer')
+    scope = _snap()['scope']
+    left = unresolved_count('trainer', scope) + unresolved_count('reviewer', scope)
     if left:
         flash(f'بقيت {left} مجموعة تحتاج مراجعتك قبل المتابعة.', 'warning')
         return redirect(url_for('names'))
     set_states(wf_names_ok_at=now_iso())
-    return redirect(url_for('process'))
+    return redirect(url_for('preview'))
 
 
-# ---------------------------------------------------------------- 3) النطاق
-@app.route('/process', methods=['GET', 'POST'])
-@roles_required('admin')
-@step_required(3)
-def process():
-    provinces, dates = list_filter_values()
-    if request.method == 'POST':
-        province = request.form.get('province', 'all')
-        date_from = request.form.get('date_from', ''); date_to = request.form.get('date_to', '')
-        if province != 'all' and province not in provinces:
-            flash('محافظة غير صالحة.', 'warning')
-        elif date_from and date_to and date_from > date_to:
-            flash('تاريخ البداية بعد تاريخ النهاية.', 'warning')
-        else:
-            set_states(wf_scope=json.dumps({'province': province, 'date_from': date_from, 'date_to': date_to}, ensure_ascii=False),
-                       wf_merged_run='')
-            return redirect(url_for('preview'))
-    scope = _snap()['scope'] or {}
-    return render_template('process.html', provinces=provinces, dates=dates, scope=scope)
-
-
-# ---------------------------------------------------------------- 4) المعاينة والأوزان
+# ---------------------------------------------------------------- 4) المعالجة والدمج
 def _preview_context(scope):
-    raw = get_submissions(scope['province'], scope['date_from'], scope['date_to'])
+    raw = get_submissions(scope)
     if not raw:
         raise ValueError('لا توجد استجابات ضمن النطاق المحدد.')
     df = pd.DataFrame(raw)
@@ -355,9 +384,10 @@ def preview():
         return redirect(url_for('process'))
     need = [x for x in groups if x['count'] > 1]
     reviewer_names = sorted({r['name'] for x in need for r in x['reviewers']})
-    return render_template('preview.html', groups=groups, scope=scope, row_count=len(df),
+    return render_template('preview.html', groups=groups, scope=scope, scope_label=_scope_summary(scope), row_count=len(df),
                            reviewer_names=reviewer_names, max_reviewers=MAX_REVIEWERS,
                            weight_table={n: [fmt_pct(w) for w in weights_for(n)] for n in range(1, MAX_REVIEWERS + 1)},
+                           weights_num={n: weights_for(n) for n in range(1, MAX_REVIEWERS + 1)},
                            unregistered=sum(1 for x in groups if not x['registered']))
 
 
@@ -387,7 +417,9 @@ def merge():
             return redirect(url_for('preview'))
         save_primary_choices({k: v for k, v in choices.items() if k in by_key})
         merged = build_merged(df, choices)
-        run_id = save_processing_run(scope['province'], scope['date_from'], scope['date_to'], merged.to_dict('records'))
+        sel = scope.get('provinces') or []
+        label = 'all' if not sel else _scope_summary(scope)
+        run_id = save_processing_run(label, scope.get('date_from', ''), scope.get('date_to', ''), merged.to_dict('records'))
         set_states(wf_merged_run=run_id)
         return redirect(url_for('results', run_id=run_id))
     except Exception as e:
@@ -420,7 +452,7 @@ def results(run_id):
                      'rec': rec.get('النتيجة والتوصية', ''),
                      'cat': 'none' if score is None else ('bad' if score < 50 else 'reserve' if score < 60 else 'cond' if score <= 80 else 'good')})
     rows.sort(key=lambda r: -(r['score'] if r['score'] is not None else -1))
-    return render_template('results.html', run=run, rows=rows, stale=stale, single_province=(run['province'] != 'all'))
+    return render_template('results.html', run=run, rows=rows, stale=stale, single_province=(run['province'] != 'all' and '،' not in run['province']))
 
 
 @app.route('/export/<int:run_id>/<kind>')

@@ -1,6 +1,7 @@
 {% extends 'base.html' %}{% block body %}
-<div class="pagehead"><div><h1>مطابقة الأسماء</h1>
-<p class="lead">راجع المجموعات التي يظن النظام أنها لشخص واحد. التعديلات مسودة فقط، ولا يُحفظ شيء حتى تضغط «اعتماد كل التغييرات». ما لم تعدّله أو تؤكده يبقى كما هو.</p></div></div>
+<div class="pagehead"><div><h1>معالجة الأسماء</h1>
+<p class="lead">الأسماء ضمن النطاق: <b>{{ scope_label }}</b>. دقّق جدول المرشحين وجدول المقيّمين (بالتبويبين). التعديلات مسودة حتى تضغط «اعتماد كل التغييرات»، وبعدها تُحفظ في قاعدة البيانات وتُطبَّق تلقائياً في أي معالجة لاحقة. بعد الاعتماد يظهر «الجدول النظيف».</p></div>
+<a class="btn ghost" href="{{ url_for('process') }}">تعديل النطاق</a></div>
 
 {% if last_batch %}<div class="undo-note" id="undo-note"><span class="dia" style="color:var(--teal)"></span><span>آخر اعتماد: <b>{{ last_batch.summary }}</b> ({{ last_batch.created_at[:16].replace('T',' ') }})</span>
 <button type="button" class="btn ghost sm" id="undo-btn">تراجع عن آخر اعتماد</button></div>{% endif %}
@@ -23,7 +24,7 @@
 <div class="nextbar" style="margin-top:26px">
   <div><b id="cont-t">…</b><p id="cont-s"></p></div>
   <form method="post" action="{{ url_for('names_continue') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <button class="gold" id="cont" disabled>متابعة إلى تحديد النطاق</button></form>
+    <button class="gold" id="cont" disabled>متابعة إلى المعالجة والدمج</button></form>
 </div>
 {% endblock %}
 
