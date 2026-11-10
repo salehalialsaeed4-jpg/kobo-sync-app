@@ -1,0 +1,87 @@
+مشروع إدارة مقابلات المدربين — إصدار PythonAnywhere / SQLite
+============================================================
+
+المزايا في هذه النسخة
+--------------------
+1) قاعدة بيانات SQLite دائمة بدلاً من ملفات Excel المؤقتة.
+2) مزامنة يدوية تدريجية من KoboToolbox باستخدام _id مع منع التكرار بمفتاح فريد.
+3) الاحتفاظ بنص الاستجابة الأصلية كاملاً في raw_json دون تعديل.
+4) واجهة مستقلة لإدخال المرشحين ومنع تكرار الاسم بعد التطبيع داخل المحافظة نفسها.
+5) واجهة لمسؤول المعالجة لتوحيد أسماء المرشحين والمقيّمين واعتمادها.
+6) فلترة حسب المحافظة والفترة اعتماداً على end.
+7) دمج أحدث تقييم لكل (مرشح + محافظة + مقيّم)، مع عدد ديناميكي من المقيّمين.
+8) تصدير Excel وPDF.
+
+الأعمدة الفعلية التي تم اعتمادها من تصدير Kobo
+---------------------------------------------
+- _id: المعرف الفريد للاستجابة ويستخدم لمؤشر المزامنة.
+- _uuid: معرف UUID إضافي.
+- _submission_time: وقت إرسال الاستجابة.
+- end: تاريخ انتهاء المقابلة ويستخدم في الفلترة.
+- الاسم الثلاثي للمدرب: اسم المرشح.
+- اسم المقيّم (الاسم والكنية): اسم عضو لجنة المقابلة.
+- المحافظة: المحافظة.
+- percentage: نتيجة التقييم.
+- ملاحظات حول الأداء، ملاحظات الخبرة التدريبية، التفاصيل إن وجدت، والرأي العام: حقول الملاحظات.
+- بقية الأعمدة تحفظ كاملة داخل raw_json، بما فيها s_q1..s_q8 وحقول التحقق.
+
+الإعدادات المطلوبة كمتغيرات بيئة
+--------------------------------
+FLASK_SECRET_KEY       قيمة عشوائية طويلة.
+ADMIN_PASSWORD        كلمة مرور مسؤول المعالجة.
+ENTRY_PASSWORD        كلمة مرور مدخل أسماء المرشحين.
+KOBO_API_TOKEN        رمز API من حساب KoboToolbox.
+KOBO_ASSET_UID        معرف أصل الاستمارة (Asset UID) كما يظهر في رابط Kobo/API، وليس id_string.
+KOBO_SERVER           مثال: https://eu.kobotoolbox.org
+DATABASE_PATH         اختياري؛ مسار دائم لقاعدة SQLite.
+
+تشغيل محلي
+----------
+python -m venv .venv
+# Windows: .venv\\Scripts\\activate
+# Linux/macOS: source .venv/bin/activate
+pip install -r requirements.txt
+set FLASK_SECRET_KEY=replace-this
+set ADMIN_PASSWORD=replace-this
+set ENTRY_PASSWORD=replace-this
+set KOBO_API_TOKEN=your-token
+set KOBO_ASSET_UID=your-asset-uid
+set KOBO_SERVER=https://eu.kobotoolbox.org
+python app.py
+
+إعداد PythonAnywhere
+--------------------
+1) ارفع محتويات هذا المجلد إلى /home/USERNAME/training_request_app.
+2) أنشئ Web App من نوع Manual configuration واختر إصدار Python المدعوم.
+3) أنشئ virtualenv وثبّت المتطلبات:
+   pip install -r /home/USERNAME/training_request_app/requirements.txt
+4) في تبويب Web اضبط Source code وWorking directory على مجلد المشروع.
+5) عدّل ملف WSGI ليضيف مجلد المشروع إلى sys.path ويستورد app:
+
+   import sys, os
+   project = '/home/USERNAME/training_request_app'
+   if project not in sys.path: sys.path.insert(0, project)
+   os.environ['FLASK_SECRET_KEY'] = 'ضع-قيمة-عشوائية-طويلة'
+   os.environ['ADMIN_PASSWORD'] = 'كلمة-مرور-المسؤول'
+   os.environ['ENTRY_PASSWORD'] = 'كلمة-مرور-المدخل'
+   os.environ['KOBO_API_TOKEN'] = 'رمز-Kobo'
+   os.environ['KOBO_ASSET_UID'] = 'Asset-UID'
+   os.environ['KOBO_SERVER'] = 'https://eu.kobotoolbox.org'
+   os.environ['DATABASE_PATH'] = '/home/USERNAME/training_request_app/data.sqlite3'
+   from app import app as application
+
+6) اربط الـ virtualenv من تبويب Web ثم Reload.
+7) إذا لم يكن نطاق Kobo ضمن قائمة Allowlist للحساب المجاني، أضفه من إعدادات PythonAnywhere إن كان الخيار متاحاً.
+8) اختبر /health ثم سجل الدخول ونفذ مزامنة تجريبية.
+
+ملاحظات مهمة قبل التشغيل الإنتاجي
+--------------------------------
+- لا تضع رمز Kobo أو كلمات المرور في ملفات المشروع المرفوعة إلى Git.
+- لا تحذف data.sqlite3؛ فهي قاعدة البيانات الدائمة.
+- خذ نسخة احتياطية دورية من قاعدة البيانات.
+- المزامنة تتم يدوياً بزر؛ لا تعتمد على المهام المجدولة.
+- مؤشر _id لا يتقدم إلا بعد اكتمال صفحات الجلب. تحفظ الصفحات تدريجياً، ولذلك إعادة المحاولة بعد انقطاع الاتصال لا تكرر ما تم حفظه.
+- يمنع UNIQUE على source_id وsource_uuid تكرار الاستجابة.
+- يلزم اختبار API على Asset UID الحقيقي قبل اعتماد المزامنة النهائية.
+- حسابات SQLite مناسبة لحجم صغير وتزامن محدود؛ راقب حجم قاعدة البيانات وسجل النسخ الاحتياطية.
+- النسخة الحالية هي أساس إعادة الهيكلة؛ يلزم اختبار صلاحيات الأدوار ومطابقة بيانات المرشحين المسجلين مع الاستجابات الفعلية قبل النشر النهائي.
